@@ -13,6 +13,8 @@ load_dotenv("secret.env")
 TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_API_KEY = os.getenv("GLM_API_KEY")
 TARGET_CHANNEL_IDS = [1451233281784942615, 1451231726918570025] 
+MAX_MESSAGES = 30
+MESSAGES_TO_KEEP = 12
 
 # OpenAI
 client = OpenAI(
@@ -27,6 +29,33 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 memoires_salons = {}
+
+# Fonctions
+async def resumer_conversation(messages):
+    try:
+        loop = asyncio.get_event_loop()
+
+        resume_prompt = [
+            {
+                "role": "system",
+                "content": "Résume la conversation suivante de manière concise en gardant les infos importantes, le contexte et les relations entre les personnes. Maximum 10 lignes."
+            },
+            {
+                "role": "user",
+                "content": "\n".join([m["content"] for m in messages if m["role"] != "system"])
+            }
+        ]
+
+        completion = await loop.run_in_executor(None, lambda: client.chat.completions.create(
+            model="z-ai/glm-4.5-air:free",
+            messages=resume_prompt
+        ))
+
+        return completion.choices[0].message.content
+
+    except Exception as e:
+        print(f"Erreur résumé : {e}")
+        return "Résumé indisponible."
 
 # PROMpT
 
@@ -87,7 +116,7 @@ async def change(interaction: discord.Interaction, personna: str):
 async def on_message(message):
     if message.author == bot.user:
         return
-
+    
     if message.channel.id in TARGET_CHANNEL_IDS:
 
         #Si le message commence par "&", c'est un message que l'on ignore
@@ -95,6 +124,18 @@ async def on_message(message):
             await bot.process_commands(message)
             return
         
+        if len(memoires_salons[message.channel.id]) > MAX_MESSAGES:
+
+            ancienne_memoire = memoires_salons[message.channel.id][:-MESSAGES_TO_KEEP]
+            messages_recents = memoires_salons[message.channel.id][-MESSAGES_TO_KEEP:]
+
+            resume = await resumer_conversation(ancienne_memoire)
+
+            memoires_salons[message.channel.id] = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": f"Résumé de la conversation précédente : {resume}"}
+            ] + messages_recents
+
         if message.channel.id not in memoires_salons:
             memoires_salons[message.channel.id] = [
                 {"role": "system", "content": SYSTEM_PROMPT}
